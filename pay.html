@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>Pay</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+</head>
+<body>
+  <main class="pay-wrap">
+    <section class="pay-card">
+      <p class="pay-amount" id="amount">Loading…</p>
+      <div class="qr" id="qr"></div>
+      <p class="muted" id="hint">Scan with any UPI app and pay this exact amount.</p>
+      <p class="timer" id="timer"></p>
+      <p class="result" id="result" hidden></p>
+    </section>
+  </main>
+<script>
+const id = new URLSearchParams(location.search).get('id');
+const $ = (s) => document.querySelector(s);
+let info = null, qrMade = false, poller, ticker;
+
+function left(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+}
+
+function finish(kind, msg, after) {
+  clearInterval(poller);
+  clearInterval(ticker);
+  $('#qr').hidden = true;
+  $('#hint').hidden = true;
+  $('#timer').hidden = true;
+  $('#result').className = 'result ' + kind;
+  $('#result').textContent = msg;
+  $('#result').hidden = false;
+  if (after) setTimeout(after, 3000);
+}
+
+async function poll() {
+  if (!id) return finish('bad', 'Payment link is missing its id.');
+  const r = await fetch('/api/orders/' + encodeURIComponent(id));
+  if (!r.ok) return finish('bad', 'This payment link was not found.');
+  info = await r.json();
+  $('#amount').textContent = '₹' + info.amount.toFixed(2);
+
+  if (info.status === 'success') {
+    return finish('ok', 'Payment received. Returning to the test page…', () => { location.href = '/#test'; });
+  }
+  if (info.status === 'failed') {
+    return finish('bad', 'Time is up. This payment link has expired.');
+  }
+  if (!qrMade) {
+    const upi = 'upi://pay?pa=' + encodeURIComponent(info.upiId) +
+      '&pn=' + encodeURIComponent(info.merchantName || 'Merchant') +
+      '&am=' + info.amount.toFixed(2) + '&cu=INR' +
+      '&tn=' + encodeURIComponent('FP' + id.slice(0, 6));
+    new QRCode($('#qr'), { text: upi, width: 240, height: 240, correctLevel: QRCode.CorrectLevel.M });
+    qrMade = true;
+  }
+}
+
+function tick() {
+  if (info) $('#timer').textContent = 'Expires in ' + left(info.expiresAt - Date.now());
+}
+
+poll().catch(() => finish('bad', 'Could not reach the server. Refresh to try again.'));
+poller = setInterval(() => poll().catch(() => {}), 3000);
+ticker = setInterval(tick, 1000);
+</script>
+</body>
+</html>

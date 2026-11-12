@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>FamePay Gateway</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="rail">
+      <a class="brand" href="#dashboard">FamePay<span> Gateway</span></a>
+      <nav class="tabs">
+        <a href="#dashboard" data-tab="dashboard">Dashboard</a>
+        <a href="#test" data-tab="test">Test payment</a>
+        <a href="#integration" data-tab="integration">Integration</a>
+        <a href="#api" data-tab="api">API docs</a>
+      </nav>
+    </aside>
+    <main id="view" class="view"></main>
+  </div>
+  <div id="toast" class="toast" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>
