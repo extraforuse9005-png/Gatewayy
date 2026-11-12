@@ -3,34 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="color-scheme" content="dark">
-  <title>FamePay Gateway</title>
+  <meta name="color-scheme" content="light">
+  <title>FamGateway</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&family=Roboto+Mono&display=swap">
   <link rel="stylesheet" href="style.css">
-  <style>
-    .topbar{position:sticky;top:0;z-index:4;display:flex;align-items:center;gap:14px;padding:14px 18px;background:var(--panel);border-bottom:1px solid var(--line)}
-    .menu-btn{background:none;border:1px solid var(--line);color:var(--text);padding:6px 12px;border-radius:10px;font-size:20px;cursor:pointer}
-    .brand{font-family:Fraunces,Georgia,serif;font-size:19px;font-weight:600}
-    .brand span{color:var(--amber)}
-    .drawer{position:fixed;top:0;left:0;bottom:0;width:270px;max-width:82vw;background:var(--panel);border-right:1px solid var(--line);padding:22px 16px;display:flex;flex-direction:column;gap:18px;transform:translateX(-100%);transition:transform .25s ease;z-index:10}
-    .drawer.open{transform:none}
-    .drawer nav{display:grid;gap:4px}
-    .drawer nav a{text-decoration:none;color:var(--muted);padding:12px 14px;border-radius:10px;font-size:16px}
-    .drawer nav a.on{background:var(--amber);color:var(--ink);font-weight:600}
-    .drawer .who{color:var(--muted);font-size:14px;word-break:break-all}
-    .drawer .btn{margin-top:auto}
-    .overlay{position:fixed;inset:0;background:#0009;z-index:9}
-    .login{min-height:100vh;display:grid;place-items:center;padding:20px}
-    .login-card{width:min(400px,100%);display:grid;gap:14px;justify-items:center;text-align:center}
-    .toast{bottom:24px}
-  </style>
 </head>
 <body>
 
   <section id="login" class="login" hidden>
-    <div class="card login-card">
-      <h1>FamePay Gateway</h1>
+    <div class="login-card">
+      <div class="brand big-brand">Fam<span>Gateway</span><sup>™</sup></div>
       <p class="muted">Sign in with Google to manage payments and your API key.</p>
       <div id="gbtn"></div>
       <p id="loginNote" class="err"></p>
@@ -39,19 +22,35 @@
 
   <section id="app" hidden>
     <header class="topbar">
+      <div class="brand">Fam<span>Gateway</span><sup>™</sup></div>
       <button id="menuBtn" class="menu-btn" aria-label="Open menu">☰</button>
-      <span class="brand">FamePay<span> Gateway</span></span>
     </header>
 
     <aside id="drawer" class="drawer">
+      <div class="drawer-head">
+        <div class="brand">Fam<span>Gateway</span><sup>™</sup></div>
+        <button id="closeBtn" class="menu-btn" aria-label="Close menu">✕</button>
+      </div>
+      <p class="group">MAIN</p>
       <nav>
         <a href="#dashboard" data-tab="dashboard">Dashboard</a>
         <a href="#test" data-tab="test">Test payment</a>
+      </nav>
+      <p class="group">SETTINGS</p>
+      <nav>
         <a href="#integration" data-tab="integration">Integration</a>
         <a href="#api" data-tab="api">API docs</a>
       </nav>
-      <p id="who" class="who"></p>
-      <button id="logoutBtn" class="btn ghost" type="button">Sign out</button>
+      <div class="drawer-foot">
+        <div class="me">
+          <span id="avatar" class="avatar">?</span>
+          <div style="min-width:0">
+            <strong id="who"></strong>
+            <span id="email" class="muted"></span>
+          </div>
+        </div>
+        <button id="logoutBtn" class="btn ghost wide" type="button">Sign out</button>
+      </div>
     </aside>
     <div id="overlay" class="overlay" hidden></div>
 
