@@ -55,6 +55,7 @@ function parseAmount(v) {
 function publicOrder(o, base = '') {
   return {
     id: o.id,
+    requested_amount: Number(rupees(o.baseAmount)),
     amount: Number(rupees(o.amount)),
     status: o.status,
     createdAt: o.createdAt,
@@ -286,6 +287,7 @@ app.delete('/api/orders', requireAccount, (req, res) => {
 // ---------- public API v1 ----------
 const apiOrder = (o, base) => ({
   id: o.id,
+  requested_amount: Number(rupees(o.baseAmount)),
   amount: Number(rupees(o.amount)),
   status: o.status,
   pay_url: base + '/pay.html?id=' + o.id,
@@ -304,7 +306,13 @@ app.get('/api/v1/payments/:id', requireApiKey, (req, res) => {
   expireOrders();
   const o = db.orders.find(x => x.id === req.params.id);
   if (!o) return res.status(404).json({ error: 'Payment not found.' });
-  res.json({ id: o.id, amount: Number(rupees(o.amount)), status: o.status, paid_at: o.paidAt });
+  res.json({
+    id: o.id,
+    requested_amount: Number(rupees(o.baseAmount)),
+    amount: Number(rupees(o.amount)),
+    status: o.status,
+    paid_at: o.paidAt,
+  });
 });
 
 app.listen(PORT, () => console.log('FamePay gateway running on port ' + PORT));
