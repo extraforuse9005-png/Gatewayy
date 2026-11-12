@@ -8,21 +8,59 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap">
   <link rel="stylesheet" href="style.css">
+  <style>
+    .topbar{position:sticky;top:0;z-index:4;display:flex;align-items:center;gap:14px;padding:14px 18px;background:var(--panel);border-bottom:1px solid var(--line)}
+    .menu-btn{background:none;border:1px solid var(--line);color:var(--text);padding:6px 12px;border-radius:10px;font-size:20px;cursor:pointer}
+    .brand{font-family:Fraunces,Georgia,serif;font-size:19px;font-weight:600}
+    .brand span{color:var(--amber)}
+    .drawer{position:fixed;top:0;left:0;bottom:0;width:270px;max-width:82vw;background:var(--panel);border-right:1px solid var(--line);padding:22px 16px;display:flex;flex-direction:column;gap:18px;transform:translateX(-100%);transition:transform .25s ease;z-index:10}
+    .drawer.open{transform:none}
+    .drawer nav{display:grid;gap:4px}
+    .drawer nav a{text-decoration:none;color:var(--muted);padding:12px 14px;border-radius:10px;font-size:16px}
+    .drawer nav a.on{background:var(--amber);color:var(--ink);font-weight:600}
+    .drawer .who{color:var(--muted);font-size:14px;word-break:break-all}
+    .drawer .btn{margin-top:auto}
+    .overlay{position:fixed;inset:0;background:#0009;z-index:9}
+    .login{min-height:100vh;display:grid;place-items:center;padding:20px}
+    .login-card{width:min(400px,100%);display:grid;gap:14px;justify-items:center;text-align:center}
+    .toast{bottom:24px}
+  </style>
 </head>
 <body>
-  <div class="shell">
-    <aside class="rail">
-      <a class="brand" href="#dashboard">FamePay<span> Gateway</span></a>
-      <nav class="tabs">
+
+  <section id="login" class="login" hidden>
+    <div class="card login-card">
+      <h1>FamePay Gateway</h1>
+      <p class="muted">Sign in with Google to manage payments and your API key.</p>
+      <div id="gbtn"></div>
+      <p id="loginNote" class="err"></p>
+    </div>
+  </section>
+
+  <section id="app" hidden>
+    <header class="topbar">
+      <button id="menuBtn" class="menu-btn" aria-label="Open menu">☰</button>
+      <span class="brand">FamePay<span> Gateway</span></span>
+    </header>
+
+    <aside id="drawer" class="drawer">
+      <nav>
         <a href="#dashboard" data-tab="dashboard">Dashboard</a>
         <a href="#test" data-tab="test">Test payment</a>
         <a href="#integration" data-tab="integration">Integration</a>
         <a href="#api" data-tab="api">API docs</a>
       </nav>
+      <p id="who" class="who"></p>
+      <button id="logoutBtn" class="btn ghost" type="button">Sign out</button>
     </aside>
+    <div id="overlay" class="overlay" hidden></div>
+
     <main id="view" class="view"></main>
-  </div>
+  </section>
+
   <div id="toast" class="toast" hidden></div>
+
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="app.js"></script>
 </body>
 </html>
