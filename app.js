@@ -1,11 +1,13 @@
-const view = document.getElementById('view');
 const $ = (s) => document.querySelector(s);
+const view = $('#view');
 const MASK = '••••••••••••••••';
+const TOKEN_KEY = 'fp_session';
 let timer = null;
 let range = 'today';
 let fw = 'html';
 let showKey = false;
 
+const getToken = () => localStorage.getItem(TOKEN_KEY);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const money = (n) => '₹' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -13,12 +15,19 @@ const when = (t) => new Date(t).toLocaleString('en-IN', { day: 'numeric', month:
 const tile = (label, value, cls) => `<div class="tile ${cls}"><span>${label}</span><strong>${value}</strong></div>`;
 
 async function api(url, options = {}) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (getToken()) headers.Authorization = 'Bearer ' + getToken();
   const res = await fetch(url, {
     method: options.method || 'GET',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401) {
+    localStorage.removeItem(TOKEN_KEY);
+    showLogin();
+    throw new Error('Please sign in again.');
+  }
   if (!res.ok) throw new Error(data.error || 'Something went wrong.');
   return data;
 }
@@ -45,7 +54,63 @@ function locked(title, text) {
     <div class="card lock"><p>${text}</p><a class="btn primary" href="#integration">Go to Integration</a></div>`;
 }
 
-async function getStatus() { return api('/api/status'); }
+const getStatus = () => api('/api/status');
+
+// ---------- sign-in ----------
+async function showLogin() {
+  clearInterval(timer);
+  $('#app').hidden = true;
+  $('#login').hidden = false;
+  $('#loginNote').textContent = '';
+  const cfg = await fetch('/api/config').then((r) => r.json());
+  const init = () => {
+    google.accounts.id.initialize({ client_id: cfg.googleClientId, callback: onGoogle });
+    google.accounts.id.renderButton($('#gbtn'), { theme: 'filled_black', size: 'large', shape: 'pill', text: 'signin_with', width: 280 });
+  };
+  if (window.google?.accounts) return init();
+  const wait = setInterval(() => {
+    if (window.google?.accounts) { clearInterval(wait); init(); }
+  }, 200);
+}
+
+async function onGoogle(resp) {
+  try {
+    const r = await fetch('/api/auth/google', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ credential: resp.credential }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error);
+    localStorage.setItem(TOKEN_KEY, data.token);
+    $('#who').textContent = data.email;
+    startApp();
+  } catch (e) {
+    $('#loginNote').textContent = e.message;
+  }
+}
+
+function startApp() {
+  $('#login').hidden = true;
+  $('#app').hidden = false;
+  route();
+}
+
+$('#logoutBtn').onclick = async () => {
+  try { await api('/api/auth/logout', { method: 'POST' }); } catch {}
+  localStorage.removeItem(TOKEN_KEY);
+  openDrawer(false);
+  showLogin();
+};
+
+// ---------- drawer (top-left menu) ----------
+function openDrawer(open) {
+  $('#drawer').classList.toggle('open', open);
+  $('#overlay').hidden = !open;
+}
+$('#menuBtn').onclick = () => openDrawer(true);
+$('#overlay').onclick = () => openDrawer(false);
+document.querySelectorAll('[data-tab]').forEach((a) => a.addEventListener('click', () => openDrawer(false)));
 
 // ---------- dashboard ----------
 async function pageDashboard() {
@@ -114,7 +179,6 @@ async function pageTest() {
 
   $('#payForm').onsubmit = async (e) => {
     e.preventDefault();
-    // Open the window synchronously so mobile browsers don't block it
     const w = window.open('', '_blank');
     if (!w) return toast('Allow pop-ups for this site, then tap Pay again.', true);
     try {
@@ -193,106 +257,149 @@ async function pageIntegration() {
   };
 }
 
-// ---------- API docs (instructions for an AI) ----------
-const SHARED_DOCS = `You are integrating the FamePay Gateway payment API into my project.
-Follow these steps in order. Do not change the payment flow.
+// ---------- API docs: instructions an AI can follow ----------
+const SHARED_DOCS = `ROLE
+You are adding the FamePay Gateway payment system to the user's project. Follow every rule below exactly. Do not invent endpoints, field names, or URLs. Do not use relative URLs for the gateway.
 
-BASE URL: __BASE__/api/v1
-API KEY: __KEY__
-Keep the API key secret. Use it only on the server, never in code that customers can read.
+GATEWAY CONFIG (copy these exactly)
+- Base URL: __BASE__/api/v1
+- API key: __KEY__
+- Every request must send the header: X-API-Key: __KEY__
+- Send Content-Type: application/json on every POST.
+- The gateway is a SEPARATE server. Never call /api/payments or any path that starts with / on the user's own site. Those point to the wrong server and fail with "File not found" or invalid JSON. Always use the full URL that starts with __BASE__.
+- Keep the API key on the server. Never put it in code that a customer can read (HTML, Flutter, or Android apps). The HTML and Flutter examples are for local testing only.
 
-HOW THE PAYMENT WORKS
-1. The customer enters an amount, for example 10, and taps Pay.
-2. Your server calls POST __BASE__/api/v1/payments with the JSON body {"amount": 10}.
-3. Save the returned "id" and "pay_url". Open pay_url in a new tab (or send it to the customer).
-4. The pay page shows a QR code for the field "amount" (for example 10.07). The customer must pay that exact amount, not the amount they typed.
-5. Every 3 seconds, call GET __BASE__/api/v1/payments/{id} with the header X-API-Key.
-6. Stop checking when "status" is "success" or "failed". Also stop after 5 minutes.
-7. If status is "success": add "requested_amount" (for example 10) to the customer's balance. Do this only once per id.
-8. If status is "failed": add nothing. Tell the customer the payment link expired.
+WHAT THE GATEWAY DOES
+Each payment has an "id". For every payment the gateway creates a unique payable amount: the requested amount plus 0.01 to 0.20. Example: requested 10 becomes payable 10.07. The customer pays that payable amount by UPI through the QR page. The gateway checks the owner's Gmail for the bank alert with that exact amount, then sets the payment to success.
 
-ENDPOINTS
-POST __BASE__/api/v1/payments
-  Headers: Content-Type: application/json, X-API-Key: __KEY__
-  Body: {"amount": 10}
-  Response: {"id", "requested_amount", "amount", "status", "pay_url", "expires_at"}
+ENDPOINT 1: CREATE A PAYMENT
+Method: POST
+URL: __BASE__/payments
+Full URL: __BASE__/payments
+Headers: Content-Type: application/json, X-API-Key: __KEY__
+Body: {"amount": 10}
+- amount: number, required, 0.01 to 100000, decimals allowed (49.5 is valid).
+Response, HTTP 200:
+{
+  "id": "a1b2c3d4e5f60718",
+  "requested_amount": 10,
+  "amount": 10.07,
+  "status": "pending",
+  "pay_url": "__BASE__/pay.html?id=a1b2c3d4e5f60718",
+  "expires_at": 1731400180000
+}
+Meaning of each field:
+- id: save it. It identifies this payment everywhere.
+- amount: the EXACT amount the customer must pay. Show this to the customer.
+- requested_amount: the amount you credit to the user's balance after success.
+- pay_url: open it in a new browser tab or window (or in the app's browser).
+- expires_at: Unix time in milliseconds. After this time the payment is failed.
 
-GET __BASE__/api/v1/payments/{id}
-  Headers: X-API-Key: __KEY__
-  Response: {"id", "requested_amount", "amount", "status", "paid_at"}
+ENDPOINT 2: CHECK A PAYMENT
+Method: GET
+URL: __BASE__/payments/{id}
+Replace {id} with the saved id. No trailing slash.
+Headers: X-API-Key: __KEY__
+Response, HTTP 200:
+{
+  "id": "a1b2c3d4e5f60718",
+  "requested_amount": 10,
+  "amount": 10.07,
+  "status": "pending",
+  "paid_at": null
+}
+status values:
+- "pending": not paid yet. Keep polling.
+- "success": paid. Credit requested_amount once, then stop polling.
+- "failed": not paid before expires_at. Credit nothing, then stop polling.
+paid_at: Unix milliseconds when the payment succeeded, otherwise null.
 
-STATUS VALUES
-- pending: waiting for the customer to pay
-- success: paid
-- failed: expired or not paid
+POLLING RULES
+- Poll every 3 seconds, no faster.
+- Stop when status is "success" or "failed".
+- Also stop at expires_at + 60 seconds and treat the payment as failed.
+- Poll from your server or a background job, not only from the browser. Save the id first, so a page reload can continue checking.
+
+CREDITING RULES (most important)
+- Credit requested_amount. Never credit amount.
+- Credit only when status is "success".
+- Credit each id only once. Store the id with a unique constraint, and use INSERT ... ON CONFLICT DO NOTHING (or INSERT OR IGNORE) before adding the balance. Only add the balance if the insert actually happened.
+- Do the insert and the balance update in one database transaction.
+- Recommended tables:
+  users(id, balance)
+  credited_payments(id PRIMARY KEY, user_id, requested_amount, credited_at)
 
 ERRORS
-- 400: invalid amount
-- 401: missing or wrong API key
-- 403: the gateway owner has not connected Gmail yet
-- 404: payment id not found
-- 429: too many pending payments for this amount; wait 1 minute and retry
+- 400: amount missing or invalid. Show the "error" text to the user.
+- 401: X-API-Key missing or wrong. Check the key.
+- 403: the gateway owner has not connected Gmail yet. Show "Payment service not ready".
+- 404: id not found. Check the saved id.
+- 429: too many pending payments for this amount. Wait 1 minute and create again.
+- 5xx or network error: retry with a short delay, then show an error.
 
-RULES
-- Always credit requested_amount. Never credit amount.
-- Save every payment id in your database and check it before crediting, so one payment is never credited twice.
-- Each payment link expires after 3 minutes.
-- Up to 20 payments per base amount can be pending at the same time.
-- Show the customer the exact amount to pay (amount) and the result message.
+ORDER OF OPERATIONS IN YOUR APP
+1. The user enters an amount and taps Pay.
+2. Your server calls ENDPOINT 1 and saves the payment with status "pending".
+3. Your server returns amount and pay_url to the client. The client opens pay_url.
+4. The customer scans the QR and pays the exact amount.
+5. Your server polls ENDPOINT 2 every 3 seconds.
+6. On "success": credit requested_amount once, mark the payment done, show "Payment received".
+7. On "failed": mark the payment failed, show "Payment expired. Please try again."
+
+TESTING CHECKLIST
+1. Create a payment for 10. Confirm amount is between 10.01 and 10.20.
+2. Open pay_url. Confirm the QR shows the same amount.
+3. Pay that amount. Confirm status becomes "success" within about a minute.
+4. Confirm the balance increased by 10 (requested_amount), not by 10.07.
+5. Reload the page during polling. Confirm the balance is not credited twice.
 `;
 
 const FW_DOCS = {
   html: {
     label: 'HTML',
-    title: 'HTML + JavaScript',
-    body: `YOUR TASK: build the payment page in HTML with JavaScript.
-Step 1: Create a file named index.html with the code below.
+    title: 'HTML + JavaScript (testing only)',
+    body: `YOUR TASK: create one HTML page that starts a payment and checks it.
+Step 1: Save the code below as index.html.
 Step 2: Open it in a browser, enter an amount, and tap Pay.
-Note: this page exposes the API key to visitors. Use it for testing. For a public site, move the fetch calls to your server (see the PHP docs).
+Step 3: The balance rule is shown in the code. In production, move the credit to your server (see PHP).
 
 --- FILE: index.html ---
 <!DOCTYPE html>
 <html>
 <body>
-<input id="amount" type="number" placeholder="Amount">
+<input id="amount" type="number" value="10">
 <button onclick="pay()">Pay</button>
 <p id="msg"></p>
 <script>
 const BASE = "__BASE__/api/v1";
 const KEY = "__KEY__";
-const credited = {};
-let balance = 0;
+const HEADERS = { "Content-Type": "application/json", "X-API-Key": KEY };
+const show = (t) => document.getElementById("msg").textContent = t;
 
 async function pay() {
-  const amount = Number(document.getElementById("amount").value);
-  const msg = document.getElementById("msg");
   const tab = window.open("about:blank", "_blank");
+  const amount = Number(document.getElementById("amount").value);
   const r = await fetch(BASE + "/payments", {
     method: "POST",
-    headers: { "Content-Type": "application/json", "X-API-Key": KEY },
+    headers: HEADERS,
     body: JSON.stringify({ amount: amount })
   });
   const p = await r.json();
-  if (!r.ok) { if (tab) tab.close(); msg.textContent = p.error; return; }
+  if (!r.ok) { tab.close(); return show(p.error); }
   tab.location.href = p.pay_url;
-  msg.textContent = "Pay " + p.amount.toFixed(2) + " in the new tab.";
-  watch(p.id);
+  show("Pay exactly " + p.amount.toFixed(2) + ". Waiting...");
+  watch(p.id, p.requested_amount, p.expires_at);
 }
 
-function watch(id) {
+function watch(id, requested, expiresAt) {
   const timer = setInterval(async () => {
-    const r = await fetch(BASE + "/payments/" + id, { headers: { "X-API-Key": KEY } });
+    if (Date.now() > expiresAt + 60000) { clearInterval(timer); return show("Expired. Nothing credited."); }
+    const r = await fetch(BASE + "/payments/" + id, { headers: HEADERS });
     const p = await r.json();
     if (p.status === "pending") return;
     clearInterval(timer);
-    const msg = document.getElementById("msg");
-    if (p.status === "success" && !credited[id]) {
-      credited[id] = true;
-      balance += p.requested_amount;
-      msg.textContent = "Payment received. Added " + p.requested_amount.toFixed(2) + ". Balance: " + balance.toFixed(2);
-    } else if (p.status === "failed") {
-      msg.textContent = "Payment link expired.";
-    }
+    if (p.status === "success") show("Success. Credit " + requested.toFixed(2) + " to the user.");
+    else show("Failed or expired. Credit nothing.");
   }, 3000);
 }
 </script>
@@ -303,13 +410,13 @@ function watch(id) {
 
   php: {
     label: 'PHP',
-    title: 'PHP (server side)',
-    body: `YOUR TASK: add FamePay to a PHP site. The API key stays on the server.
-Step 1: Make sure PHP has the curl extension enabled.
-Step 2: Create famepay.php (shared helper).
+    title: 'PHP (recommended for real websites)',
+    body: `YOUR TASK: add FamePay to a PHP website. The API key stays on the server.
+Step 1: Enable the PHP curl and pdo_sqlite extensions.
+Step 2: Create famepay.php (gateway helper).
 Step 3: Create create_payment.php. Your page calls it to start a payment.
-Step 4: Create check_payment.php. Your page calls it every 3 seconds.
-Step 5: Your page: on Pay, call create_payment.php with the amount, open pay_url, then poll check_payment.php?id=... until status is success or failed. On success, add requested_amount to the customer's balance in your database, after checking the id is not already credited.
+Step 4: Create check_payment.php. Your page calls it every 3 seconds with the payment id.
+Step 5: Create credit.php and call it only when status is "success".
 
 --- FILE: famepay.php ---
 <?php
@@ -327,36 +434,47 @@ function fp_call($method, $path, $body = null) {
     curl_close($ch);
     return [$code, json_decode($res, true)];
 }
-
-function fp_create($amount) {
-    return fp_call("POST", "/payments", ["amount" => $amount]);
-}
-
-function fp_status($id) {
-    return fp_call("GET", "/payments/" . urlencode($id));
-}
 --- END FILE ---
 
 --- FILE: create_payment.php ---
 <?php
-header("Content-Type: application/json");
 require "famepay.php";
-$data = json_decode(file_get_contents("php://input"), true);
-[$code, $res] = fp_create($data["amount"] ?? 0);
+header("Content-Type: application/json");
+$body = json_decode(file_get_contents("php://input"), true);
+[$code, $res] = fp_call("POST", "/payments", ["amount" => (float)($body["amount"] ?? 0)]);
 http_response_code($code);
 echo json_encode($res);
 --- END FILE ---
 
 --- FILE: check_payment.php ---
 <?php
-header("Content-Type: application/json");
 require "famepay.php";
-[$code, $res] = fp_status($_GET["id"] ?? "");
+header("Content-Type: application/json");
+[$code, $res] = fp_call("GET", "/payments/" . urlencode($_GET["id"] ?? ""));
 http_response_code($code);
 echo json_encode($res);
 --- END FILE ---
 
-Usage example for your credit step (pseudo code): if status is "success" and the id is not in your processed_payments table, insert the id, then add requested_amount to the balance.`,
+--- FILE: credit.php ---
+<?php
+// Call this ONLY when check_payment returned status "success".
+// Credits requested_amount exactly once per payment id.
+function credit_once(PDO $pdo, string $userId, array $payment): bool {
+    $pdo->beginTransaction();
+    $ins = $pdo->prepare("INSERT OR IGNORE INTO credited_payments (id, user_id, requested_amount) VALUES (?, ?, ?)");
+    $ins->execute([$payment["id"], $userId, $payment["requested_amount"]]);
+    if ($ins->rowCount() === 1) {
+        $pdo->prepare("UPDATE users SET balance = balance + ? WHERE id = ?")
+            ->execute([$payment["requested_amount"], $userId]);
+        $pdo->commit();
+        return true;
+    }
+    $pdo->rollBack();
+    return false; // already credited
+}
+--- END FILE ---
+
+Browser side: POST to your own create_payment.php with {"amount": 10}, open the returned pay_url, then poll your own check_payment.php?id=... every 3 seconds. When status is "success", your server calls credit_once(). Never call the gateway URL from the browser in production.`,
   },
 
   flutter: {
@@ -365,9 +483,9 @@ Usage example for your credit step (pseudo code): if status is "success" and the
     body: `YOUR TASK: add FamePay to a Flutter app.
 Step 1: Run: flutter pub add http url_launcher
 Step 2: Create lib/famepay.dart with the code below.
-Step 3: On the Pay button, call createPayment(amount), open pay_url with launchUrl, then call waitForPayment(id).
-Step 4: If the result status is "success", add requested_amount to the user's balance, once per id.
-Note: the API key inside a mobile app can be read by anyone who has the app. For a published app, call your own server, and have the server call FamePay.
+Step 3: On the Pay button, call createPayment(10), open pay_url with launchUrl, then call waitForPayment(id).
+Step 4: If the result status is "success", credit requested_amount once for that id. Do this on your backend when possible.
+Note: a key inside a published app can be read by anyone. For a released app, have your own server call FamePay.
 
 --- FILE: lib/famepay.dart ---
 import 'dart:convert';
@@ -395,8 +513,8 @@ Future<Map<String, dynamic>> checkPayment(String id) async {
   return jsonDecode(res.body) as Map<String, dynamic>;
 }
 
-Future<Map<String, dynamic>> waitForPayment(String id) async {
-  for (var i = 0; i < 100; i++) {
+Future<Map<String, dynamic>> waitForPayment(String id, DateTime expiresAt) async {
+  while (DateTime.now().isBefore(expiresAt.add(const Duration(seconds: 60)))) {
     await Future.delayed(const Duration(seconds: 3));
     final p = await checkPayment(id);
     if (p['status'] != 'pending') return p;
@@ -405,23 +523,24 @@ Future<Map<String, dynamic>> waitForPayment(String id) async {
 }
 --- END FILE ---
 
-Usage example:
+Usage:
 final p = await createPayment(10);
 await launchUrl(Uri.parse(p['pay_url']), mode: LaunchMode.externalApplication);
-final result = await waitForPayment(p['id']);
+final expires = DateTime.fromMillisecondsSinceEpoch(p['expires_at']);
+final result = await waitForPayment(p['id'], expires);
 if (result['status'] == 'success') {
-  // credit p['requested_amount'] once, using p['id'] to prevent double credit
+  // credit p['requested_amount'] once per p['id']
 }`,
   },
 
   java: {
     label: 'Java',
-    title: 'Java (Java 11+)',
-    body: `YOUR TASK: add FamePay to a Java project. Use it on the server side.
-Step 1: Add the Gson library (com.google.code.gson:gson) to your project.
+    title: 'Java (Java 11+ and Gson)',
+    body: `YOUR TASK: add FamePay to a Java server or desktop app.
+Step 1: Add the Gson dependency (com.google.code.gson:gson).
 Step 2: Create FamePay.java with the code below.
 Step 3: Call FamePay.createPayment(10). Send pay_url to the customer.
-Step 4: Call FamePay.waitForPayment(id). If the status is "success", credit requested_amount once per id.
+Step 4: Call FamePay.waitForPayment(id, expiresAtMillis). If status is "success", credit requested_amount once per id, using a database unique constraint on id.
 
 --- FILE: FamePay.java ---
 import com.google.gson.JsonObject;
@@ -443,8 +562,7 @@ public class FamePay {
             .header("X-API-Key", KEY)
             .POST(HttpRequest.BodyPublishers.ofString(body))
             .build();
-        String text = client.send(req, HttpResponse.BodyHandlers.ofString()).body();
-        return JsonParser.parseString(text).getAsJsonObject();
+        return parse(client.send(req, HttpResponse.BodyHandlers.ofString()).body());
     }
 
     public static JsonObject checkPayment(String id) throws Exception {
@@ -452,12 +570,11 @@ public class FamePay {
             .header("X-API-Key", KEY)
             .GET()
             .build();
-        String text = client.send(req, HttpResponse.BodyHandlers.ofString()).body();
-        return JsonParser.parseString(text).getAsJsonObject();
+        return parse(client.send(req, HttpResponse.BodyHandlers.ofString()).body());
     }
 
-    public static JsonObject waitForPayment(String id) throws Exception {
-        for (int i = 0; i < 100; i++) {
+    public static JsonObject waitForPayment(String id, long expiresAtMillis) throws Exception {
+        while (System.currentTimeMillis() < expiresAtMillis + 60000) {
             Thread.sleep(3000);
             JsonObject p = checkPayment(id);
             if (!p.get("status").getAsString().equals("pending")) return p;
@@ -466,26 +583,30 @@ public class FamePay {
         failed.addProperty("status", "failed");
         return failed;
     }
+
+    static JsonObject parse(String text) {
+        return JsonParser.parseString(text).getAsJsonObject();
+    }
 }
 --- END FILE ---
 
-Usage example:
+Usage:
 JsonObject p = FamePay.createPayment(10);
-System.out.println(p.get("pay_url").getAsString());
-JsonObject result = FamePay.waitForPayment(p.get("id").getAsString());
-if (result.get("status").getAsString().equals("success")) {
-    // credit p.get("requested_amount") once, using p.get("id") to prevent double credit
+System.out.println("Open: " + p.get("pay_url").getAsString());
+JsonObject r = FamePay.waitForPayment(p.get("id").getAsString(), p.get("expires_at").getAsLong());
+if (r.get("status").getAsString().equals("success")) {
+    // credit p.get("requested_amount") once per p.get("id")
 }`,
   },
 
   kotlin: {
     label: 'Kotlin',
     title: 'Kotlin (Android or JVM)',
-    body: `YOUR TASK: add FamePay to a Kotlin app. Run network calls on a background thread (Dispatchers.IO in coroutines), never on the main thread.
+    body: `YOUR TASK: add FamePay to a Kotlin app. Run network calls off the main thread (Dispatchers.IO in coroutines).
 Step 1: Create FamePay.kt with the code below. It uses only built-in libraries (org.json is part of Android).
 Step 2: Call createPayment(10.0) on a background thread. Open pay_url in a browser.
-Step 3: Call waitForPayment(id). If status is "success", credit requested_amount once per id.
-Note: the API key inside an app can be read by anyone who has it. For a published app, call your own server, and have the server call FamePay.
+Step 3: Call waitForPayment(id, expiresAt). If status is "success", credit requested_amount once per id.
+Note: an app's API key can be extracted. For a released app, have your own server call FamePay.
 
 --- FILE: FamePay.kt ---
 import org.json.JSONObject
@@ -505,18 +626,16 @@ fun fpRequest(method: String, path: String, body: String? = null): JSONObject {
         conn.outputStream.use { it.write(body.toByteArray()) }
     }
     val stream = if (conn.responseCode in 200..299) conn.inputStream else conn.errorStream
-    val text = stream.bufferedReader().use { it.readText() }
-    return JSONObject(text)
+    return JSONObject(stream.bufferedReader().use { it.readText() })
 }
 
 fun createPayment(amount: Double): JSONObject =
     fpRequest("POST", "/payments", JSONObject().put("amount", amount).toString())
 
-fun checkPayment(id: String): JSONObject =
-    fpRequest("GET", "/payments/" + id)
+fun checkPayment(id: String): JSONObject = fpRequest("GET", "/payments/" + id)
 
-fun waitForPayment(id: String): JSONObject {
-    repeat(100) {
+fun waitForPayment(id: String, expiresAtMillis: Long): JSONObject {
+    while (System.currentTimeMillis() < expiresAtMillis + 60000) {
         Thread.sleep(3000)
         val p = checkPayment(id)
         if (p.getString("status") != "pending") return p
@@ -525,23 +644,23 @@ fun waitForPayment(id: String): JSONObject {
 }
 --- END FILE ---
 
-Usage example:
+Usage:
 val p = createPayment(10.0)
 // open p.getString("pay_url") in a browser
-val result = waitForPayment(p.getString("id"))
+val result = waitForPayment(p.getString("id"), p.getLong("expires_at"))
 if (result.getString("status") == "success") {
-    // credit p.getDouble("requested_amount") once, using p.getString("id") to prevent double credit
+    // credit p.getDouble("requested_amount") once per p.getString("id")
 }`,
   },
 
   python: {
     label: 'Python',
-    title: 'Python (Flask or any Python app)',
+    title: 'Python (Flask, Django, or scripts)',
     body: `YOUR TASK: add FamePay to a Python project. Keep the API key on the server.
-Step 1: Install the library: pip install requests
+Step 1: Run: pip install requests
 Step 2: Create famepay.py with the code below.
 Step 3: Call create_payment(10). Send pay_url to the customer.
-Step 4: Call wait_for_payment(id). If the status is "success", credit requested_amount once per id.
+Step 4: Call wait_for_payment(id, expires_at). If status is "success", credit requested_amount once per id.
 
 --- FILE: famepay.py ---
 import time
@@ -562,8 +681,8 @@ def check_payment(payment_id):
     r = requests.get(BASE + "/payments/" + payment_id, headers=HEADERS, timeout=15)
     return r.json()
 
-def wait_for_payment(payment_id):
-    for _ in range(100):
+def wait_for_payment(payment_id, expires_at_ms):
+    while time.time() * 1000 < expires_at_ms + 60000:
         time.sleep(3)
         p = check_payment(payment_id)
         if p["status"] != "pending":
@@ -571,12 +690,12 @@ def wait_for_payment(payment_id):
     return {"status": "failed"}
 --- END FILE ---
 
-Usage example:
+Usage:
 p = create_payment(10)
 print(p["pay_url"])
-result = wait_for_payment(p["id"])
+result = wait_for_payment(p["id"], p["expires_at"])
 if result["status"] == "success":
-    # credit p["requested_amount"] once, using p["id"] to prevent double credit
+    # credit p["requested_amount"] once per p["id"]
     pass`,
   },
 };
@@ -598,7 +717,7 @@ async function pageApi() {
     const f = FW_DOCS[fw];
     view.innerHTML = `
       <header class="head"><h1>API docs</h1>
-        <p class="muted">Copy the docs for your framework and give them to an AI. It will build the payment flow step by step.</p></header>
+        <p class="muted">Copy the docs for your framework and give them to an AI. The docs contain the exact URLs, requests, responses, and rules.</p></header>
       <section class="card form">
         <div class="split"><strong>Your API key</strong><button class="btn small ghost" id="regen" type="button">Regenerate</button></div>
         <p class="key">${showKey ? esc(st.apiKey) : MASK}</p>
@@ -644,4 +763,15 @@ async function route() {
 }
 
 window.addEventListener('hashchange', route);
-route();
+
+async function boot() {
+  if (!getToken()) return showLogin();
+  try {
+    const st = await getStatus();
+    $('#who').textContent = st.email || '';
+    startApp();
+  } catch {
+    showLogin();
+  }
+}
+boot();
