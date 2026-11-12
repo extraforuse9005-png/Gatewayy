@@ -22,7 +22,12 @@ app.use('/api/v1', (req, res, next) => {
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
-app.use(express.static(path.join(__dirname, 'public')));
+
+// Serve the front-end files from the top level of the repo
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+['app.js', 'style.css', 'pay.html', 'index.html'].forEach((f) =>
+  app.get('/' + f, (req, res) => res.sendFile(path.join(__dirname, f)))
+);
 
 // ---------- storage (simple JSON file) ----------
 function load() {
