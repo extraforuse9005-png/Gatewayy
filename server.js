@@ -2,44 +2,140 @@ const express = require('express');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const admin = require('firebase-admin');
 const { ImapFlow } = require('imapflow');
 const { simpleParser } = require('mailparser');
 
+// ===== EDIT THESE TWO LINES =====
+const OWNER_EMAIL = 'extraforuse9005@gmail.com';
+const GOOGLE_CLIENT_ID = '294944502473-vjthm1hhhh0iqd6lusa9kjq5fttbv243.apps.googleusercontent.com';
+// =================================
+
 const PORT = process.env.PORT || 3000;
 const DB_FILE = path.join(__dirname, 'data.json');
-const ORDER_MS = 3 * 60 * 1000; // each payment link lives 3 minutes
-const SLOT_COUNT = 20;          // base + 0.01 ... base + 0.20
-const CHECK_MS = 8000;          // inbox check interval
+const ORDER_MS = 3 * 60 * 1000;
+const SLOT_COUNT = 20;
+const CHECK_MS = 8000;
+const FLUSH_MS = 2000;
+const SESSION_MS = 30 * 24 * 60 * 60 * 1000;
 const CREDIT_WORDS = /(received|credited|credit|paid you|payment)/i;
 const MASK = '••••••••••••••••';
 
+// Firebase service account JSON is stored in Render's environment variables
+const SERVICE_ACCOUNT = process.env.FIREBASE_SERVICE_ACCOUNT
+  ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
+  : null;
+if (SERVICE_ACCOUNT) {
+  admin.initializeApp({ credential: admin.credential.cert(SERVICE_ACCOUNT) });
+}
+const fdb = SERVICE_ACCOUNT ? admin.firestore() : null;
+const SETTINGS_REF = () => fdb.collection('famepay_settings').doc('main');
+const ORDERS_COL = () => fdb.collection('famepay_orders');
+
 const app = express();
 app.use(express.json());
+
 app.use('/api/v1', (req, res, next) => {
   res.set('Access-Control-Allow-Origin', '*');
-  res.set('Access-Control-Allow-Headers', 'Content-Type, X-API-Key');
+  res.set('Access-Control-Allow-Headers', 'Content-Type, X-API-Key, Authorization');
   res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
 
-// Serve the front-end files from the top level of the repo
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 ['app.js', 'style.css', 'pay.html', 'index.html'].forEach((f) =>
   app.get('/' + f, (req, res) => res.sendFile(path.join(__dirname, f)))
 );
 
-// ---------- storage (simple JSON file) ----------
-function load() {
-  try { return JSON.parse(fs.readFileSync(DB_FILE, 'utf8')); }
-  catch { return { account: null, apiKey: null, orders: [], seen: [] }; }
-}
-let db = load();
-db.orders ||= [];
-db.seen ||= [];
+// ---------- storage ----------
+// db is kept in memory for speed. Firestore is updated every 2 seconds.
+let db = { account: null, apiKey: null, orders: [], seen: [], sessions: {} };
 let lastError = null;
 let checking = false;
-function save() { fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2)); }
+let flushing = false;
+let settingsSaved = '';
+const orderSaved = new Map(); // order id -> JSON last written to Firestore
+
+// Local fallback (only used when Firebase is not configured)
+function save() {
+  if (!fdb) fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
+}
+
+// Writes only what changed to Firestore
+async function flush() {
+  if (!fdb || flushing) return;
+  flushing = true;
+  try {
+    const settings = {
+      account: db.account,
+      apiKey: db.apiKey,
+      sessions: db.sessions,
+      seen: db.seen,
+    };
+    const s = JSON.stringify(settings);
+    if (s !== settingsSaved) {
+      await SETTINGS_REF().set(settings);
+      settingsSaved = s;
+    }
+
+    const changes = [];
+    const current = new Set();
+    for (const o of db.orders) {
+      current.add(o.id);
+      const j = JSON.stringify(o);
+      if (orderSaved.get(o.id) !== j) changes.push({ id: o.id, json: j, data: o, remove: false });
+    }
+    for (const id of orderSaved.keys()) {
+      if (!current.has(id)) changes.push({ id, remove: true });
+    }
+
+    for (let i = 0; i < changes.length; i += 400) {
+      const part = changes.slice(i, i + 400);
+      const batch = fdb.batch();
+      for (const c of part) {
+        const ref = ORDERS_COL().doc(c.id);
+        if (c.remove) batch.delete(ref);
+        else batch.set(ref, c.data);
+      }
+      await batch.commit();
+      for (const c of part) {
+        if (c.remove) orderSaved.delete(c.id);
+        else orderSaved.set(c.id, c.json);
+      }
+    }
+  } catch (e) {
+    console.error('Firestore save failed:', e.message);
+  } finally {
+    flushing = false;
+  }
+}
+
+async function initStore() {
+  if (!fdb) {
+    try { db = { ...db, ...JSON.parse(fs.readFileSync(DB_FILE, 'utf8')) }; } catch {}
+    console.log('Storage: data.json (local only)');
+    return;
+  }
+
+  const s = await SETTINGS_REF().get();
+  const old = await fdb.collection('famepay').doc('main').get(); // data from the earlier version
+  const source = s.exists ? s.data() : (old.exists ? old.data() : null);
+  if (source) {
+    db.account = source.account || null;
+    db.apiKey = source.apiKey || null;
+    db.sessions = source.sessions || {};
+    db.seen = source.seen || [];
+  }
+
+  const snap = await ORDERS_COL().get();
+  db.orders = snap.docs.map((d) => d.data());
+  snap.docs.forEach((d) => orderSaved.set(d.id, JSON.stringify(d.data())));
+  if (!snap.size && old.exists && (old.data().orders || []).length) {
+    db.orders = old.data().orders; // migrate orders from the earlier version
+  }
+  console.log('Storage: Firestore. Loaded ' + db.orders.length + ' orders.');
+}
 
 // ---------- helpers ----------
 const newId = () => crypto.randomBytes(8).toString('hex');
@@ -91,7 +187,6 @@ function createOrder(basePaise) {
   return null;
 }
 
-// Matches 10.07 exactly, not 110.07 or 10.070
 function amountPattern(paise) {
   const s = rupees(paise).replace('.', '\\.');
   return new RegExp('(?<![\\d.])' + s + '(?!\\d)');
@@ -158,9 +253,25 @@ async function checkMail() {
     checking = false;
   }
 }
-setInterval(() => { expireOrders(); checkMail(); }, CHECK_MS);
 
-// ---------- middleware ----------
+// ---------- auth ----------
+async function verifyGoogle(idToken) {
+  const r = await fetch('https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(idToken || ''));
+  if (!r.ok) return null;
+  const t = await r.json();
+  const verified = t.email_verified === true || t.email_verified === 'true';
+  if (t.aud !== GOOGLE_CLIENT_ID || !verified) return null;
+  return t;
+}
+
+const bearer = (req) => (req.get('Authorization') || '').replace('Bearer ', '');
+
+const requireLogin = (req, res, next) => {
+  const s = db.sessions[bearer(req)];
+  if (!s || s.expires < Date.now()) return res.status(401).json({ error: 'Please sign in with Google.' });
+  next();
+};
+
 const requireAccount = (req, res, next) =>
   db.account ? next() : res.status(403).json({ error: 'Connect Gmail in Integration first.' });
 
@@ -170,8 +281,28 @@ const requireApiKey = (req, res, next) => {
   next();
 };
 
+app.get('/api/config', (req, res) => res.json({ googleClientId: GOOGLE_CLIENT_ID }));
+
+app.post('/api/auth/google', async (req, res) => {
+  const info = await verifyGoogle(req.body?.credential);
+  if (!info) return res.status(401).json({ error: 'Google sign-in could not be verified.' });
+  if (info.email.toLowerCase() !== OWNER_EMAIL.toLowerCase())
+    return res.status(403).json({ error: 'This Google account is not allowed. Use the owner Gmail.' });
+  const token = crypto.randomBytes(24).toString('hex');
+  for (const [k, s] of Object.entries(db.sessions)) if (s.expires < Date.now()) delete db.sessions[k];
+  db.sessions[token] = { email: info.email, name: info.name || '', expires: Date.now() + SESSION_MS };
+  save();
+  res.json({ token, email: info.email, name: info.name || '' });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  delete db.sessions[bearer(req)];
+  save();
+  res.json({ ok: true });
+});
+
 // ---------- integration ----------
-app.get('/api/status', (req, res) => {
+app.get('/api/status', requireLogin, (req, res) => {
   const a = db.account;
   res.json({
     connected: !!a,
@@ -184,7 +315,7 @@ app.get('/api/status', (req, res) => {
   });
 });
 
-app.post('/api/integration', async (req, res) => {
+app.post('/api/integration', requireLogin, async (req, res) => {
   const b = req.body || {};
   const email = String(b.email || '').trim();
   const upiId = String(b.upiId || '').trim();
@@ -211,20 +342,20 @@ app.post('/api/integration', async (req, res) => {
   res.json({ ok: true });
 });
 
-app.delete('/api/integration', (req, res) => {
+app.delete('/api/integration', requireLogin, (req, res) => {
   db.account = null;
   save();
   res.json({ ok: true });
 });
 
-app.post('/api/integration/apikey', requireAccount, (req, res) => {
+app.post('/api/integration/apikey', requireLogin, requireAccount, (req, res) => {
   db.apiKey = newKey();
   save();
   res.json({ apiKey: db.apiKey });
 });
 
 // ---------- dashboard ----------
-app.get('/api/dashboard', (req, res) => {
+app.get('/api/dashboard', requireLogin, (req, res) => {
   expireOrders();
   const range = req.query.range === 'all' ? 'all' : 'today';
   const start = new Date();
@@ -247,7 +378,7 @@ app.get('/api/dashboard', (req, res) => {
 });
 
 // ---------- payment links (test payment page) ----------
-app.post('/api/orders', requireAccount, (req, res) => {
+app.post('/api/orders', requireLogin, requireAccount, (req, res) => {
   const paise = parseAmount(req.body?.amount);
   if (!paise) return res.status(400).json({ error: 'Enter a valid amount, for example 10 or 49.5.' });
   const o = createOrder(paise);
@@ -255,13 +386,14 @@ app.post('/api/orders', requireAccount, (req, res) => {
   res.json(publicOrder(o));
 });
 
-app.get('/api/orders', requireAccount, (req, res) => {
+app.get('/api/orders', requireLogin, requireAccount, (req, res) => {
   expireOrders();
   res.json(
     db.orders.slice().sort((a, b) => b.createdAt - a.createdAt).slice(0, 100).map(o => publicOrder(o))
   );
 });
 
+// Public on purpose: the pay page (QR) loads this by order id
 app.get('/api/orders/:id', (req, res) => {
   expireOrders();
   const o = db.orders.find(x => x.id === req.params.id);
@@ -269,7 +401,7 @@ app.get('/api/orders/:id', (req, res) => {
   res.json({ ...publicOrder(o), upiId: db.account.upiId, merchantName: db.account.merchantName });
 });
 
-app.delete('/api/orders/:id', requireAccount, (req, res) => {
+app.delete('/api/orders/:id', requireLogin, requireAccount, (req, res) => {
   const o = db.orders.find(x => x.id === req.params.id);
   if (!o) return res.status(404).json({ error: 'Not found.' });
   if (o.status === 'pending') return res.status(400).json({ error: 'Wait until this payment finishes before clearing it.' });
@@ -278,13 +410,13 @@ app.delete('/api/orders/:id', requireAccount, (req, res) => {
   res.json({ ok: true });
 });
 
-app.delete('/api/orders', requireAccount, (req, res) => {
+app.delete('/api/orders', requireLogin, requireAccount, (req, res) => {
   db.orders = db.orders.filter(o => o.status === 'pending');
   save();
   res.json({ ok: true });
 });
 
-// ---------- public API v1 ----------
+// ---------- public API v1 (used by your own projects) ----------
 const apiOrder = (o, base) => ({
   id: o.id,
   requested_amount: Number(rupees(o.baseAmount)),
@@ -315,4 +447,10 @@ app.get('/api/v1/payments/:id', requireApiKey, (req, res) => {
   });
 });
 
-app.listen(PORT, () => console.log('FamePay gateway running on port ' + PORT));
+initStore()
+  .then(() => {
+    setInterval(flush, FLUSH_MS);
+    setInterval(() => { expireOrders(); checkMail(); }, CHECK_MS);
+    app.listen(PORT, () => console.log('FamePay gateway running on port ' + PORT));
+  })
+  .catch((e) => { console.error('Startup failed:', e.message); process.exit(1); });
