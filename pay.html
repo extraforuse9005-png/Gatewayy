@@ -6,34 +6,88 @@
   <title>Payment</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700&family=Roboto+Condensed:wght@700&display=swap">
-  <link rel="stylesheet" href="style.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <style>
+    [hidden]{display:none!important}
+    *{box-sizing:border-box}
+    html,body{margin:0;background:#fff;color:#111;font-family:Poppins,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+    body{min-height:100vh;display:grid;justify-items:center;align-content:start;padding:36px 16px 40px}
+
+    .pay-card{position:relative;overflow:hidden;width:min(380px,100%);border:3px solid #111;border-radius:22px;padding:18px 18px 24px;display:grid;justify-items:center;gap:18px;background:#fff}
+
+    .top{width:100%;display:flex;justify-content:space-between;align-items:center;gap:10px;padding-bottom:14px;border-bottom:2px solid #c4c4c4}
+    .name{font-size:26px;font-weight:700;letter-spacing:-.01em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+    .tags{display:flex;align-items:center;gap:10px;font-size:15px;font-weight:600;white-space:nowrap}
+    .bar{width:2px;height:18px;background:#111}
+    .dot{display:inline-block;width:14px;height:14px;border-radius:50%;margin-right:6px;vertical-align:-2px}
+    .dot.g{background:#22c55e}
+    .dot.r{background:#ef4444}
+
+    .qr-box{border:3px solid #111;border-radius:20px;padding:12px;background:#fff;display:grid;place-items:center}
+    #qr{line-height:0}
+
+    .save{width:100%;border:0;border-radius:999px;background:#0a0a0a;color:#fff;font-family:inherit;font-size:18px;font-weight:600;padding:15px 20px;display:flex;align-items:center;justify-content:center;gap:14px;cursor:pointer;box-shadow:0 6px 14px rgba(0,0,0,.25)}
+    .save svg{width:24px;height:24px;flex:none}
+    .save .sep{width:2px;height:26px;background:#777;flex:none}
+
+    .wait{display:flex;align-items:center;gap:12px;font-size:18px;font-weight:500;color:#111;margin:0}
+    .ring{width:26px;height:26px;border-radius:50%;border:3px solid #a3a3a3;border-right-color:transparent;flex:none;animation:spin 1.2s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+
+    .timer{display:flex;align-items:center;gap:10px;font-size:28px;font-weight:700;margin:0;letter-spacing:.01em}
+    .timer svg{width:24px;height:24px;flex:none}
+
+    .expired{margin:0;color:#b42328;font-size:18px;font-weight:600;text-align:center}
+
+    .overlay{position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);background:rgba(229,229,233,.97);padding:18px 16px 20px;text-align:center;display:grid;justify-items:center;gap:8px}
+    .o-title{font-family:"Roboto Condensed",Arial Narrow,Arial,sans-serif;font-weight:700;font-size:44px;color:#000;line-height:1.1}
+    .o-check{width:92px;height:92px;border-radius:50%;border:3px solid #22c55e;color:#22c55e;display:grid;place-items:center;font-size:52px;line-height:1}
+    .o-sub{font-family:"Roboto Condensed",Arial Narrow,Arial,sans-serif;font-size:30px;color:#6b6b6b}
+
+    @media (max-width:380px){
+      .name{font-size:22px}
+      .tags{font-size:13px;gap:6px}
+      .save{font-size:16px}
+    }
+  </style>
 </head>
-<body class="pay-body">
-  <main class="pay-wrap">
-    <section class="pay-card" id="card">
-      <div class="pay-top">
-        <div class="pay-name" id="merchant">Payment</div>
-        <div class="pay-tags">
-          <span><i class="dot g"></i>Fast</span>
-          <span><i class="dot r"></i>Safe</span>
-        </div>
+<body>
+  <main class="pay-card" id="card">
+    <div class="top">
+      <div class="name" id="merchant">Payment</div>
+      <div class="tags">
+        <span><i class="dot g"></i>Fast</span>
+        <span class="bar"></span>
+        <span><i class="dot r"></i>Safe</span>
       </div>
+    </div>
 
-      <div class="qr-box" id="qrBox"><div id="qr"></div></div>
+    <div class="qr-box" id="qrBox"><div id="qr"></div></div>
 
-      <button id="saveBtn" class="save-btn" type="button">⤓&nbsp;&nbsp;Save in Gallery</button>
+    <button id="saveBtn" class="save" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 20h16"/>
+      </svg>
+      <span class="sep"></span>
+      <span>Save in Gallery</span>
+    </button>
 
-      <p id="wait" class="wait"><span class="spin"></span><span>Waiting for payment ...</span></p>
-      <p id="timer" class="timer">◷&nbsp;&nbsp;<b id="left">--:--</b></p>
-      <p id="expired" class="expired" hidden></p>
+    <p id="wait" class="wait"><span class="ring"></span><span>Waiting for payment ...</span></p>
 
-      <div id="success" class="success" hidden>
-        <div class="s-title">Payment Success</div>
-        <div class="s-check">✓</div>
-        <div class="s-sub" id="redirect">Redirecting..</div>
-      </div>
-    </section>
+    <p id="timer" class="timer">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="2.2" stroke-linecap="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>
+      </svg>
+      <span id="left">--:--</span>
+    </p>
+
+    <p id="expired" class="expired" hidden></p>
+
+    <div id="success" class="overlay" hidden>
+      <div class="o-title">Payment Success</div>
+      <div class="o-check">✓</div>
+      <div class="o-sub" id="redirect">Redirecting..</div>
+    </div>
   </main>
 
 <script>
@@ -52,22 +106,23 @@ function stop() {
   clearInterval(ticker);
 }
 
-function fail(msg) {
-  stop();
+function hideAll() {
   $('#qrBox').hidden = true;
   $('#saveBtn').hidden = true;
   $('#wait').hidden = true;
   $('#timer').hidden = true;
+}
+
+function fail(msg) {
+  stop();
+  hideAll();
   $('#expired').textContent = msg;
   $('#expired').hidden = false;
 }
 
 function succeed() {
   stop();
-  $('#qrBox').hidden = true;
-  $('#saveBtn').hidden = true;
-  $('#wait').hidden = true;
-  $('#timer').hidden = true;
+  hideAll();
   $('#success').hidden = false;
   if (info.return_url) {
     const u = new URL(info.return_url);
@@ -86,7 +141,7 @@ function makeQr() {
     '&pn=' + encodeURIComponent(info.merchantName || 'Merchant') +
     '&am=' + info.amount.toFixed(2) + '&cu=INR' +
     '&tn=' + encodeURIComponent('FP' + id.slice(0, 6));
-  new QRCode($('#qr'), { text: upi, width: 220, height: 220, correctLevel: QRCode.CorrectLevel.M });
+  new QRCode($('#qr'), { text: upi, width: 216, height: 216, correctLevel: QRCode.CorrectLevel.M });
   qrMade = true;
 }
 
